@@ -6,4 +6,10 @@ authors = ["Aleksa Sarai <asarai@suse.de>"]
 license = "GPL-3.0+"
 
 [dependencies]
+libc = "~0.2.22"
 clap = "~2.23.3"
+
+[dependencies.nix]
+version = "~0.8.1"
+default-features = true
+features = ["signalfd"]
