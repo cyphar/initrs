@@ -1,0 +1,8 @@
+[package]
+name = "initrs"
+version = "0.0.0"
+description = "Simple init and signal forwarder for containers."
+authors = ["Aleksa Sarai <asarai@suse.de>"]
+license = "GPL-3.0+"
+
+[dependencies]
