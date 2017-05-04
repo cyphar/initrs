@@ -6,3 +6,4 @@ authors = ["Aleksa Sarai <asarai@suse.de>"]
 license = "GPL-3.0+"
 
 [dependencies]
+clap = "~2.23.3"

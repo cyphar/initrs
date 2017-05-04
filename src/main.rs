@@ -16,6 +16,32 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+use std::process::Command;
+
+#[macro_use]
+extern crate clap;
+use clap::{App, Arg, AppSettings};
+
 fn main() {
-    println!("Hello, world!");
+    let options = App::new("initrs")
+                      .setting(AppSettings::TrailingVarArg)
+                      .author("Aleksa Sarai <asarai@suse.de>")
+                      .version(crate_version!())
+                      .about("Simple init for containers.")
+                      // Represents the actual command to be run.
+                      .arg(Arg::with_name("command")
+                               .multiple(true))
+                      .get_matches();
+
+    let args = options.values_of("command").unwrap()
+                      .collect::<Vec<_>>();
+
+    let (cmd, args) = args.as_slice()
+                          .split_first().unwrap();
+
+    // We have to prepare a command.
+    let status = Command::new(cmd)
+                         .args(args)
+                         .status().unwrap();
+    assert!(status.success());
 }
