@@ -25,6 +25,7 @@ use libc::pid_t;
 
 extern crate nix;
 use nix::{Errno, c_int};
+use nix::unistd::{getpgid, setpgid, tcsetpgrp};
 use nix::sys::wait::*;
 use nix::sys::signal::*;
 use nix::sys::signalfd::*;
@@ -33,6 +34,10 @@ use nix::sys::signalfd::*;
 extern crate clap;
 use clap::{App, Arg, AppSettings};
 
+/// Reaps all zombies that are children of initrs, returning the list of pids
+/// that were reaped. If there are no children left alive or no children were
+/// reaped, no error is returned. Unknown status codes from waitpid(2) are
+/// logged and ignored.
 fn reap_zombies() -> Result<Vec<pid_t>, Error> {
     let mut pids = Vec::new();
     loop {
@@ -57,6 +62,7 @@ fn reap_zombies() -> Result<Vec<pid_t>, Error> {
     return Ok(pids);
 }
 
+/// Forward the given signal to the provided process.
 fn forward_signal(pid: pid_t, sig: Signal) -> Result<(), Error> {
     kill(pid, sig)?;
 
@@ -64,7 +70,45 @@ fn forward_signal(pid: pid_t, sig: Signal) -> Result<(), Error> {
     return Ok(());
 }
 
+/// Places a process in the foreground (this function should be called in the
+/// context of a Command::before_exec closure), making it the leader of a new
+/// process group that is set to be the foreground process group in its session
+/// with the current pty.
+fn make_foreground() -> Result<(), Error> {
+    // Create a new process group.
+    setpgid(0, 0)?;
+    let pgid = getpgid(None)?;
+
+    // TODO: We should open /dev/tty and not use stdin, because that is not
+    //       actually correct (tini does this wrong).
+
+    // We have to block SIGTTOU here otherwise we will get stopped if we are in
+    // a background process group.
+    let mut sigmask = SigSet::all();
+    sigmask.add(Signal::SIGTTOU);
+    sigmask.thread_block()?;
+
+    // Set ourselves to be the foreground process group in our session.
+    return match tcsetpgrp(0, pgid) {
+        // We have succeeded in being the foreground process.
+        Ok(_) => Ok(()),
+
+        // ENOTTY [no tty] and ENXIO [lx zones] can happen in "normal" usage,
+        // which indicate that we aren't in the foreground.
+        // TODO: Should we undo the setpgid(0, 0) here?
+        err @ Err(nix::Error::Sys(Errno::ENOTTY)) |
+        err @ Err(nix::Error::Sys(Errno::ENXIO)) => {
+            println!("[*] Failed to set process in foreground: {:?}", err);
+            Ok(())
+        },
+
+        Err(err) => Err(Error::from(err)),
+    };
+}
+
 fn main() {
+    // TODO: We almost certainly should be creating a new session here...
+
     // We need to store the initial signal mask first, which we will restore
     // before execing the user process (signalfd requires us to block all
     // signals we are masking but this would be inherited by our child).
@@ -104,6 +148,7 @@ fn main() {
     let child = Command::new(cmd)
                         .args(args)
                         .before_exec(move || {
+                            make_foreground()?;
                             init_sigmask.thread_set_mask()?;
                             return Ok(());
                         })
