@@ -24,8 +24,7 @@ extern crate libc;
 use libc::pid_t;
 
 extern crate nix;
-use nix::c_int;
-use nix::Errno;
+use nix::{Errno, c_int};
 use nix::sys::wait::*;
 use nix::sys::signal::*;
 use nix::sys::signalfd::*;
@@ -44,10 +43,12 @@ fn reap_zombies() -> Result<Vec<pid_t>, Error> {
                 println!("[*] Child process exited: {}", cpid);
                 pids.push(cpid);
             },
+
             // No children left or none of them have died.
             // TODO: ECHILD should cause us to quit.
             Ok(WaitStatus::StillAlive) |
             Err(nix::Error::Sys(Errno::ECHILD)) => break,
+
             // Error conditions.
             status @ Ok(_) => println!("[?] Unknown status: {:?}", status),
             Err(err)       => return Err(Error::from(err)),
@@ -56,21 +57,19 @@ fn reap_zombies() -> Result<Vec<pid_t>, Error> {
     return Ok(pids);
 }
 
-fn forward_signal(pid: &pid_t, sig: Signal) -> Result<bool, Error> {
-    return match kill(*pid, sig) {
-        Ok(_) => {
-            println!("[+] Forwarded {:?} to {}", sig, pid);
-            Ok(false)
-        },
-        Err(err) => Err(Error::from(err)),
-    };
+fn forward_signal(pid: pid_t, sig: Signal) -> Result<(), Error> {
+    kill(pid, sig)?;
+
+    println!("[+] Forwarded {:?} to {}", sig, pid);
+    return Ok(());
 }
 
 fn main() {
     // We need to store the initial signal mask first, which we will restore
     // before execing the user process (signalfd requires us to block all
     // signals we are masking but this would be inherited by our child).
-    let init_sigmask = SigSet::thread_get_mask().unwrap();
+    let init_sigmask = SigSet::thread_get_mask()
+                              .expect("could not get main thread sigmask");
 
     // Block all signals so we can use signalfd. Note that while it would be
     // great for us to just set SIGCHLD to SIG_IGN (that way zombies will be
@@ -78,8 +77,10 @@ fn main() {
     // this way we can more easily handle the child we are forwarding our
     // signals to dying.
     let sigmask = SigSet::all();
-    sigmask.thread_block().unwrap();
-    let mut sfd = SignalFd::new(&sigmask).unwrap();
+    sigmask.thread_block()
+           .expect("could not block all signals");
+    let mut sfd = SignalFd::new(&sigmask)
+                           .expect("could not create signalfd for all signals");
 
     // Parse options.
     let options = App::new("initrs")
@@ -89,6 +90,7 @@ fn main() {
                       .about("Simple init for containers.")
                       // Represents the actual command to be run.
                       .arg(Arg::with_name("command")
+                               .required(true)
                                .multiple(true))
                       .get_matches();
 
@@ -101,9 +103,9 @@ fn main() {
     // Spawn the child.
     let child = Command::new(cmd)
                         .args(args)
-                        .before_exec(move || match init_sigmask.thread_set_mask() {
-                            Ok(_) => Ok(()),
-                            Err(err) => Err(Error::from(err)),
+                        .before_exec(move || {
+                            init_sigmask.thread_set_mask()?;
+                            return Ok(());
                         })
                         .spawn().expect("failed to start child process");
 
@@ -111,23 +113,21 @@ fn main() {
     let pid = child.id() as pid_t;
     loop {
         // TODO: Handle errors in a more sane way. :wink:
-        let siginfo = sfd.read_signal().expect("waiting for signal").unwrap();
-        let signum = Signal::from_c_int(siginfo.ssi_signo as c_int).unwrap();
+        let siginfo = sfd.read_signal()
+                         .expect("could not read signal")
+                         .expect("no signal was read");
+        let signum = Signal::from_c_int(siginfo.ssi_signo as c_int)
+                            .expect("could not parse ssi_signo as Signal");
 
         let result = match signum {
-            Signal::SIGCHLD => {
-                match reap_zombies() {
-                    Ok(pids) => Ok(pids.contains(&pid)),
-                    Err(err) => Err(err),
-                }
-            },
-            _ => forward_signal(&pid, signum),
+            Signal::SIGCHLD => reap_zombies().and_then(|pids| Ok(pids.contains(&pid))),
+                          _ => forward_signal(pid, signum).map(|_| false),
         };
 
         match result {
-            Ok(true) => break,
-            Ok(_)    => continue,
-            Err(err) => println!("[!] Hit an error in handling {:?}: {}", signum, err),
+            Ok(true)  => break,
+            Ok(false) => continue,
+            Err(err)  => println!("[!] Hit an error in handling {:?}: {}", signum, err),
         };
     }
 
