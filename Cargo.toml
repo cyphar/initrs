@@ -3,6 +3,10 @@ name = "initrs"
 version = "0.0.0"
 description = "Simple init and signal forwarder for containers."
 authors = ["Aleksa Sarai <asarai@suse.de>"]
+repository = "https://github.com/cyphar/initrs"
+readme = "README.md"
+keywords = ["init", "container"]
+categories = ["command-line-utilities"]
 license = "GPL-3.0+"
 
 [dependencies]
