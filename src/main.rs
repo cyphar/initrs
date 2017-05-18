@@ -16,16 +16,18 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+use std::fs::File;
 use std::io::Error;
 use std::process::Command;
 use std::os::unix::process::CommandExt;
+use std::os::unix::io::AsRawFd;
 
 extern crate libc;
 use libc::pid_t;
 
 extern crate nix;
 use nix::{Errno, c_int};
-use nix::unistd::{getpgid, setpgid, tcsetpgrp};
+use nix::unistd;
 use nix::sys::wait::*;
 use nix::sys::signal::*;
 use nix::sys::signalfd::*;
@@ -76,11 +78,11 @@ fn forward_signal(pid: pid_t, sig: Signal) -> Result<(), Error> {
 /// with the current pty.
 fn make_foreground() -> Result<(), Error> {
     // Create a new process group.
-    setpgid(0, 0)?;
-    let pgid = getpgid(None)?;
+    unistd::setpgid(0, 0)?;
+    let pgid = unistd::getpgid(None)?;
 
-    // TODO: We should open /dev/tty and not use stdin, because that is not
-    //       actually correct (tini does this wrong).
+    // Open /dev/tty, to avoid issues of std{in,out,err} being duped.
+    let tty = File::open("/dev/tty")?;
 
     // We have to block SIGTTOU here otherwise we will get stopped if we are in
     // a background process group.
@@ -89,7 +91,7 @@ fn make_foreground() -> Result<(), Error> {
     sigmask.thread_block()?;
 
     // Set ourselves to be the foreground process group in our session.
-    return match tcsetpgrp(0, pgid) {
+    return match unistd::tcsetpgrp(tty.as_raw_fd(), pgid) {
         // We have succeeded in being the foreground process.
         Ok(_) => Ok(()),
 
@@ -107,8 +109,6 @@ fn make_foreground() -> Result<(), Error> {
 }
 
 fn main() {
-    // TODO: We almost certainly should be creating a new session here...
-
     // We need to store the initial signal mask first, which we will restore
     // before execing the user process (signalfd requires us to block all
     // signals we are masking but this would be inherited by our child).
