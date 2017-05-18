@@ -16,6 +16,29 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+//! initrs is a minimal container init that implements signal forwarding, zombie
+//! reaping and other similar features you would expect from a simple container
+//! init. It only runs a single program as the "main program" which is placed in
+//! a foreground process group on the controlling TTY. At the moment it does not
+//! nicely handle running as a non PID-1 process.
+//!
+//! ```notrust
+//! $ initrs --help
+//! initrs 0.0.0
+//! Aleksa Sarai <asarai@suse.de>
+//! Simple init for containers.
+//!
+//! USAGE:
+//!   initrs <command>...
+//!
+//! FLAGS:
+//!   -h, --help       Prints help information
+//!   -V, --version    Prints version information
+//!
+//! ARGS:
+//!   <command>...
+//! ```
+
 use std::fs::File;
 use std::io::Error;
 use std::process::Command;
