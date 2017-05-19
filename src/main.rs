@@ -16,6 +16,9 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+// I don't like ruby-like returns.
+#![cfg_attr(feature="cargo-clippy", allow(needless_return))]
+
 //! initrs is a minimal container init that implements signal forwarding, zombie
 //! reaping and other similar features you would expect from a simple container
 //! init. It only runs a single program as the "main program" which is placed in
@@ -51,13 +54,12 @@ use libc::pid_t;
 extern crate nix;
 use nix::{Errno, c_int};
 use nix::unistd;
-use nix::sys::wait::*;
-use nix::sys::signal::*;
-use nix::sys::signalfd::*;
+use nix::sys::wait;
+use nix::sys::signal;
+use nix::sys::signalfd;
 
 #[macro_use]
 extern crate clap;
-use clap::{App, Arg, AppSettings};
 
 /// Reaps all zombies that are children of initrs, returning the list of pids
 /// that were reaped. If there are no children left alive or no children were
@@ -66,17 +68,17 @@ use clap::{App, Arg, AppSettings};
 fn reap_zombies() -> Result<Vec<pid_t>, Error> {
     let mut pids = Vec::new();
     loop {
-        match waitpid(-1, Some(WNOHANG)) {
+        match wait::waitpid(-1, Some(wait::WNOHANG)) {
             // Did anything die?
-            Ok(WaitStatus::Exited(cpid, _)) |
-            Ok(WaitStatus::Signaled(cpid, _, _)) => {
+            Ok(wait::WaitStatus::Exited(cpid, _)) |
+            Ok(wait::WaitStatus::Signaled(cpid, _, _)) => {
                 println!("[*] Child process exited: {}", cpid);
                 pids.push(cpid);
             }
 
             // No children left or none of them have died.
             // TODO: ECHILD should cause us to quit.
-            Ok(WaitStatus::StillAlive) |
+            Ok(wait::WaitStatus::StillAlive) |
             Err(nix::Error::Sys(Errno::ECHILD)) => break,
 
             // Error conditions.
@@ -88,15 +90,15 @@ fn reap_zombies() -> Result<Vec<pid_t>, Error> {
 }
 
 /// Forward the given signal to the provided process.
-fn forward_signal(pid: pid_t, sig: Signal) -> Result<(), Error> {
-    kill(pid, sig)?;
+fn forward_signal(pid: pid_t, sig: signal::Signal) -> Result<(), Error> {
+    signal::kill(pid, sig)?;
 
     println!("[+] Forwarded {:?} to {}", sig, pid);
     return Ok(());
 }
 
 /// Places a process in the foreground (this function should be called in the
-/// context of a Command::before_exec closure), making it the leader of a new
+/// context of a `Command::before_exec` closure), making it the leader of a new
 /// process group that is set to be the foreground process group in its session
 /// with the current pty.
 fn make_foreground() -> Result<(), Error> {
@@ -109,8 +111,8 @@ fn make_foreground() -> Result<(), Error> {
 
     // We have to block SIGTTOU here otherwise we will get stopped if we are in
     // a background process group.
-    let mut sigmask = SigSet::all();
-    sigmask.add(Signal::SIGTTOU);
+    let mut sigmask = signal::SigSet::all();
+    sigmask.add(signal::Signal::SIGTTOU);
     sigmask.thread_block()?;
 
     // Set ourselves to be the foreground process group in our session.
@@ -135,28 +137,30 @@ fn main() {
     // We need to store the initial signal mask first, which we will restore
     // before execing the user process (signalfd requires us to block all
     // signals we are masking but this would be inherited by our child).
-    let init_sigmask = SigSet::thread_get_mask().expect("could not get main thread sigmask");
+    let init_sigmask = signal::SigSet::thread_get_mask()
+        .expect("could not get main thread sigmask");
 
     // Block all signals so we can use signalfd. Note that while it would be
     // great for us to just set SIGCHLD to SIG_IGN (that way zombies will be
     // auto-reaped by the kernel for us, as guaranteed by POSIX-2001 and SUS)
     // this way we can more easily handle the child we are forwarding our
     // signals to dying.
-    let sigmask = SigSet::all();
+    let sigmask = signal::SigSet::all();
     sigmask.thread_block().expect("could not block all signals");
-    let mut sfd = SignalFd::new(&sigmask).expect("could not create signalfd for all signals");
+    let mut sfd = signalfd::SignalFd::new(&sigmask)
+        .expect("could not create signalfd for all signals");
 
     // Parse options.
-    let options = App::new("initrs")
-                      .setting(AppSettings::TrailingVarArg)
-                      .author("Aleksa Sarai <asarai@suse.de>")
-                      .version(crate_version!())
-                      .about("Simple init for containers.")
-                      // Represents the actual command to be run.
-                      .arg(Arg::with_name("command")
-                               .required(true)
-                               .multiple(true))
-                      .get_matches();
+    let options = clap::App::new("initrs")
+                            .setting(clap::AppSettings::TrailingVarArg)
+                            .author("Aleksa Sarai <asarai@suse.de>")
+                            .version(crate_version!())
+                            .about("Simple init for containers.")
+                            // Represents the actual command to be run.
+                            .arg(clap::Arg::with_name("command")
+                                           .required(true)
+                                           .multiple(true))
+                            .get_matches();
 
     // Get the arguments for the process to run.
     let args = options.values_of("command").unwrap().collect::<Vec<_>>();
@@ -180,11 +184,11 @@ fn main() {
         let siginfo = sfd.read_signal()
             .expect("could not read signal")
             .expect("no signal was read");
-        let signum = Signal::from_c_int(siginfo.ssi_signo as c_int)
+        let signum = signal::Signal::from_c_int(siginfo.ssi_signo as c_int)
             .expect("could not parse ssi_signo as Signal");
 
         let result = match signum {
-            Signal::SIGCHLD => reap_zombies().and_then(|pids| Ok(pids.contains(&pid))),
+            signal::Signal::SIGCHLD => reap_zombies().and_then(|pids| Ok(pids.contains(&pid))),
             _ => forward_signal(pid, signum).map(|_| false),
         };
 
