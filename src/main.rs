@@ -111,7 +111,7 @@ fn make_foreground() -> Result<(), Error> {
 
     // We have to block SIGTTOU here otherwise we will get stopped if we are in
     // a background process group.
-    let mut sigmask = signal::SigSet::all();
+    let mut sigmask = signal::SigSet::empty();
     sigmask.add(signal::Signal::SIGTTOU);
     sigmask.thread_block()?;
 
