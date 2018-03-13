@@ -117,28 +117,28 @@ fn make_foreground() -> Result<(), Error> {
 
     // Set ourselves to be the foreground process group in our session.
     return match unistd::tcsetpgrp(tty.as_raw_fd(), pgid) {
-               // We have succeeded in being the foreground process.
-               Ok(_) => Ok(()),
+        // We have succeeded in being the foreground process.
+        Ok(_) => Ok(()),
 
-               // ENOTTY [no tty] and ENXIO [lx zones] can happen in "normal" usage,
-               // which indicate that we aren't in the foreground.
-               // TODO: Should we undo the setpgid(0, 0) here?
-               err @ Err(nix::Error::Sys(Errno::ENOTTY)) |
-               err @ Err(nix::Error::Sys(Errno::ENXIO)) => {
-                   println!("[*] Failed to set process in foreground: {:?}", err);
-                   Ok(())
-               }
+        // ENOTTY [no tty] and ENXIO [lx zones] can happen in "normal" usage,
+        // which indicate that we aren't in the foreground.
+        // TODO: Should we undo the setpgid(0, 0) here?
+        err @ Err(nix::Error::Sys(Errno::ENOTTY)) |
+        err @ Err(nix::Error::Sys(Errno::ENXIO)) => {
+            println!("[*] Failed to set process in foreground: {:?}", err);
+            Ok(())
+        }
 
-               Err(err) => Err(Error::from(err)),
-           };
+        Err(err) => Err(Error::from(err)),
+    };
 }
 
 fn main() {
     // We need to store the initial signal mask first, which we will restore
     // before execing the user process (signalfd requires us to block all
     // signals we are masking but this would be inherited by our child).
-    let init_sigmask = signal::SigSet::thread_get_mask()
-        .expect("could not get main thread sigmask");
+    let init_sigmask =
+        signal::SigSet::thread_get_mask().expect("could not get main thread sigmask");
 
     // Block all signals so we can use signalfd. Note that while it would be
     // great for us to just set SIGCHLD to SIG_IGN (that way zombies will be
@@ -147,8 +147,8 @@ fn main() {
     // signals to dying.
     let sigmask = signal::SigSet::all();
     sigmask.thread_block().expect("could not block all signals");
-    let mut sfd = signalfd::SignalFd::new(&sigmask)
-        .expect("could not create signalfd for all signals");
+    let mut sfd =
+        signalfd::SignalFd::new(&sigmask).expect("could not create signalfd for all signals");
 
     // Parse options.
     let options = clap::App::new("initrs")
@@ -170,10 +170,10 @@ fn main() {
     let child = Command::new(cmd)
         .args(args)
         .before_exec(move || {
-                         make_foreground()?;
-                         init_sigmask.thread_set_mask()?;
-                         return Ok(());
-                     })
+            make_foreground()?;
+            init_sigmask.thread_set_mask()?;
+            return Ok(());
+        })
         .spawn()
         .expect("failed to start child process");
 
@@ -181,18 +181,18 @@ fn main() {
     let pid = child.id() as pid_t;
     loop {
         // TODO: Handle errors in a more sane way. :wink:
-        let siginfo = sfd.read_signal()
-            .expect("could not read signal")
-            .expect("no signal was read");
+        let siginfo = sfd.read_signal().expect("could not read signal").expect(
+            "no signal was read",
+        );
         let signum = signal::Signal::from_c_int(siginfo.ssi_signo as c_int)
             .expect("could not parse ssi_signo as Signal");
 
-        let result = match signum {
+        let finished = match signum {
             signal::Signal::SIGCHLD => reap_zombies().and_then(|pids| Ok(pids.contains(&pid))),
             _ => forward_signal(pid, signum).map(|_| false),
         };
 
-        match result {
+        match finished {
             Ok(true) => break,
             Ok(false) => continue,
             Err(err) => println!("[!] Hit an error in handling {:?}: {}", signum, err),
