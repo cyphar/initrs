@@ -43,7 +43,7 @@
 //! ```
 
 use std::fs::File;
-use std::io::Error;
+use std::io::{Error, ErrorKind};
 use std::process::Command;
 use std::os::unix::process::CommandExt;
 use std::os::unix::io::AsRawFd;
@@ -77,7 +77,10 @@ fn reap_zombies() -> Result<Vec<pid_t>, Error> {
             }
 
             // No children left or none of them have died.
-            // TODO: ECHILD should cause us to quit.
+            // TODO: ECHILD really should cause us to quit (but doesn't currently), since
+            //       if we get ECHILD we know that we have no children and thus will never get a
+            //       SIGCHLD again. But this assumes we missed the SIGCHLD of the main process
+            //       (which shouldn't be possible).
             Ok(wait::WaitStatus::StillAlive) |
             Err(nix::Error::Sys(Errno::ECHILD)) => break,
 
@@ -95,6 +98,20 @@ fn forward_signal(pid: pid_t, sig: signal::Signal) -> Result<(), Error> {
 
     println!("[+] Forwarded {:?} to {}", sig, pid);
     return Ok(());
+}
+
+/// process_signals reads a signal from the given SignalFd and then handles it. If any child pids
+/// were detected as having died, they are returned (an empty Vec means that no children died or
+/// the signal wasn't SIGCHLD).
+fn process_signals(pid1: pid_t, sfd: &mut signalfd::SignalFd) -> Result<Vec<pid_t>, Error> {
+    let siginfo = sfd.read_signal()?
+                     .ok_or(Error::new(ErrorKind::Other, "no signals read"))?;
+    let signum = signal::Signal::from_c_int(siginfo.ssi_signo as c_int)?;
+
+    match signum {
+        signal::Signal::SIGCHLD => reap_zombies(),
+        _ => forward_signal(pid1, signum).map(|_| Vec::new()),
+    }
 }
 
 /// Places a process in the foreground (this function should be called in the
@@ -177,25 +194,19 @@ fn main() {
         .spawn()
         .expect("failed to start child process");
 
-    // Loop, reading all signals we recieved to figure out
-    let pid = child.id() as pid_t;
+    // Loop, reading all signals we recieved to figure out what the correct response is (forward
+    // all signals other than SIGCHLD which we react to by reaping the children). In addition all
+    // errors are logged and ignored from here on out -- because we *must not exit* as we are pid1
+    // and exiting will kill the container.
+    let pid1 = child.id() as pid_t;
     loop {
-        // TODO: Handle errors in a more sane way. :wink:
-        let siginfo = sfd.read_signal().expect("could not read signal").expect(
-            "no signal was read",
-        );
-        let signum = signal::Signal::from_c_int(siginfo.ssi_signo as c_int)
-            .expect("could not parse ssi_signo as Signal");
-
-        let finished = match signum {
-            signal::Signal::SIGCHLD => reap_zombies().and_then(|pids| Ok(pids.contains(&pid))),
-            _ => forward_signal(pid, signum).map(|_| false),
-        };
-
-        match finished {
-            Ok(true) => break,
-            Ok(false) => continue,
-            Err(err) => println!("[!] Hit an error in handling {:?}: {}", signum, err),
+        match process_signals(pid1, &mut sfd) {
+            Err(err) => println!("[!] Hit an error in signal handling: {}", err),
+            Ok(pids) => {
+                if pids.contains(&pid1) {
+                    break;
+                }
+            }
         };
     }
 
