@@ -59,6 +59,10 @@ use nix::sys::signal;
 use nix::sys::signalfd;
 
 #[macro_use]
+extern crate log;
+extern crate env_logger;
+
+#[macro_use]
 extern crate clap;
 
 /// Reaps all zombies that are children of initrs, returning the list of pids
@@ -72,7 +76,7 @@ fn reap_zombies() -> Result<Vec<pid_t>, Error> {
             // Did anything die?
             Ok(wait::WaitStatus::Exited(cpid, _)) |
             Ok(wait::WaitStatus::Signaled(cpid, _, _)) => {
-                println!("[*] Child process exited: {}", cpid);
+                debug!("child process exited: {}", cpid);
                 pids.push(cpid);
             }
 
@@ -85,7 +89,7 @@ fn reap_zombies() -> Result<Vec<pid_t>, Error> {
             Err(nix::Error::Sys(Errno::ECHILD)) => break,
 
             // Error conditions.
-            status @ Ok(_) => println!("[?] Unknown status: {:?}", status),
+            status @ Ok(_) => info!("saw unknown status: {:?}", status),
             Err(err) => return Err(Error::from(err)),
         };
     }
@@ -96,7 +100,7 @@ fn reap_zombies() -> Result<Vec<pid_t>, Error> {
 fn forward_signal(pid: pid_t, sig: signal::Signal) -> Result<(), Error> {
     signal::kill(pid, sig)?;
 
-    println!("[+] Forwarded {:?} to {}", sig, pid);
+    debug!("forwarded {:?} to {}", sig, pid);
     return Ok(());
 }
 
@@ -104,8 +108,10 @@ fn forward_signal(pid: pid_t, sig: signal::Signal) -> Result<(), Error> {
 /// were detected as having died, they are returned (an empty Vec means that no children died or
 /// the signal wasn't SIGCHLD).
 fn process_signals(pid1: pid_t, sfd: &mut signalfd::SignalFd) -> Result<Vec<pid_t>, Error> {
-    let siginfo = sfd.read_signal()?
-                     .ok_or(Error::new(ErrorKind::Other, "no signals read"))?;
+    let siginfo = sfd.read_signal()?.ok_or(Error::new(
+        ErrorKind::Other,
+        "no signals read",
+    ))?;
     let signum = signal::Signal::from_c_int(siginfo.ssi_signo as c_int)?;
 
     match signum {
@@ -142,7 +148,7 @@ fn make_foreground() -> Result<(), Error> {
         // TODO: Should we undo the setpgid(0, 0) here?
         err @ Err(nix::Error::Sys(Errno::ENOTTY)) |
         err @ Err(nix::Error::Sys(Errno::ENXIO)) => {
-            println!("[*] Failed to set process in foreground: {:?}", err);
+            info!("failed to set process in foreground: {:?}", err);
             Ok(())
         }
 
@@ -151,6 +157,11 @@ fn make_foreground() -> Result<(), Error> {
 }
 
 fn main() {
+    // Set up logging.
+    let env = env_logger::Env::new().filter("INITRS_LOG")
+                                    .write_style("INITRS_LOG_STYLE");
+    env_logger::init_from_env(env);
+
     // We need to store the initial signal mask first, which we will restore
     // before execing the user process (signalfd requires us to block all
     // signals we are masking but this would be inherited by our child).
@@ -199,9 +210,10 @@ fn main() {
     // errors are logged and ignored from here on out -- because we *must not exit* as we are pid1
     // and exiting will kill the container.
     let pid1 = child.id() as pid_t;
+    debug!("spawned '{}' as pid1 with pid {}", cmd, pid1);
     loop {
         match process_signals(pid1, &mut sfd) {
-            Err(err) => println!("[!] Hit an error in signal handling: {}", err),
+            Err(err) => info!("unexpected error during signal handling: {}", err),
             Ok(pids) => {
                 if pids.contains(&pid1) {
                     break;
@@ -210,5 +222,5 @@ fn main() {
         };
     }
 
-    println!("[+] Child has exited, we are done.");
+    debug!("bailing: pid1 {} has exited", pid1);
 }
