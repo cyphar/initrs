@@ -127,10 +127,17 @@ fn process_signals(pid1: pid_t, sfd: &mut signalfd::SignalFd) -> Result<Vec<pid_
 fn make_foreground() -> Result<(), Error> {
     // Create a new process group.
     unistd::setpgid(0, 0)?;
-    let pgid = unistd::getpgid(None)?;
+    let pgrp = unistd::getpgrp();
 
     // Open /dev/tty, to avoid issues of std{in,out,err} being duped.
-    let tty = File::open("/dev/tty")?;
+    let tty = match File::open("/dev/tty") {
+        Ok(tty) => tty,
+        // We ignore errors opening. This means that there's no PTY set up.
+        Err(err) => {
+            info!("failed to open /dev/tty: {}", err);
+            return Ok(());
+        },
+    };
 
     // We have to block SIGTTOU here otherwise we will get stopped if we are in
     // a background process group.
@@ -139,7 +146,7 @@ fn make_foreground() -> Result<(), Error> {
     sigmask.thread_block()?;
 
     // Set ourselves to be the foreground process group in our session.
-    return match unistd::tcsetpgrp(tty.as_raw_fd(), pgid) {
+    return match unistd::tcsetpgrp(tty.as_raw_fd(), pgrp) {
         // We have succeeded in being the foreground process.
         Ok(_) => Ok(()),
 
