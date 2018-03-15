@@ -1,6 +1,6 @@
 [package]
 name = "initrs"
-version = "0.0.0"
+version = "0.1.0"
 description = "Simple init and signal forwarder for containers."
 authors = ["Aleksa Sarai <asarai@suse.de>"]
 repository = "https://github.com/cyphar/initrs"
