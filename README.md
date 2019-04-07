@@ -1,3 +1,5 @@
+# THIS REPOSITORY IS OUTDATED AND ARCHIVED -- PLEASE SWITCH TO [CATATONIT](https://github.com/openSUSE/catatonit). #
+
 ## `initrs` ##
 
 [![Build Status](https://travis-ci.org/cyphar/initrs.svg?branch=master)](https://travis-ci.org/cyphar/initrs)
